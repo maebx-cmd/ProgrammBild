@@ -97,8 +97,12 @@ final class ScanEngine: ObservableObject {
         let t = settings.t
         switch c {
         case .nude:
-            return r.sensitive == true || (r.nsfwScore ?? 0) >= t.nsfwModel
+            // Apple entscheidet, wenn verfügbar; sonst das Ersatzmodell
+            if let s = r.sensitive { return s }
+            return (r.nsfwScore ?? 0) >= t.nsfwModel
         case .revealing:
+            if heuristic(r, .nude) { return false }   // Nacktbilder nicht doppelt
+            if (r.sexyScore ?? 0) >= t.sexyModel { return true }
             guard let s = r.person else { return false }
             return PersonAnalyzer.revealingScore(s) >= t.revealingLabel
         case .otherPeople:
@@ -171,7 +175,8 @@ final class ScanEngine: ObservableObject {
         guard let r = results[id] else { return [] }
         var out: [String] = []
         if r.sensitive == true { out.append("Apple: sensibler Inhalt") }
-        if let n = r.nsfwScore, n >= settings.t.nsfwModel { out.append("Ersatzmodell: \(Int(n * 100)) %") }
+        if let n = r.nsfwScore, n >= 0.2 { out.append("Ersatzmodell nackt: \(Int(n * 100)) %") }
+        if let x = r.sexyScore, x >= 0.2 { out.append("Ersatzmodell freizügig: \(Int(x * 100)) %") }
         if let s = r.person {
             out.append("Menschen-Score \(Int(PersonAnalyzer.score(s, settings.t) * 100)) %")
             out += PersonAnalyzer.reasons(s, settings.t)
@@ -260,7 +265,10 @@ final class ScanEngine: ObservableObject {
         var texts: [String] = []
         for f in frames {
             if let s = await nudity.appleSensitive(f) { r.sensitive = (r.sensitive ?? false) || s }
-            if r.sensitive == nil, let n = nudity.fallbackScore(f) { r.nsfwScore = max(r.nsfwScore ?? 0, n) }
+            if let m = nudity.modelScores(f) {
+                r.nsfwScore = max(r.nsfwScore ?? 0, m.nude)
+                r.sexyScore = max(r.sexyScore ?? 0, m.sexy)
+            }
             if let out = person.analyze(f, thresholds: t) {
                 r.person = Self.merge(r.person, out.signals)
                 r.facePrints = Array((r.facePrints + out.facePrints).prefix(6))

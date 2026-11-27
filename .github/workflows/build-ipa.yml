@@ -9,7 +9,35 @@ permissions:
   contents: write
 
 jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Modell aus dem Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: NSFW.mlpackage
+          key: nsfw-mobilenet2-224-v1-${{ hashFiles('tools/convert_nsfw.py') }}
+      - uses: actions/setup-python@v5
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          python-version: "3.10"
+      - name: Herunterladen + umwandeln
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install -q "tensorflow-cpu==2.12.*" "coremltools==7.2" "numpy<1.24"
+          curl -fL --retry 3 -o nsfw.h5 https://s3.amazonaws.com/ir_public/nsfwjscdn/nsfw_mobilenet2.224x224.h5
+          ls -lh nsfw.h5
+          python tools/convert_nsfw.py nsfw.h5 NSFW.mlpackage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsfw-model
+          path: NSFW.mlpackage
+
   build:
+    needs: model
     runs-on: macos-26
     timeout-minutes: 40
     steps:
@@ -25,6 +53,12 @@ jobs:
           SDKV=$(xcrun --sdk iphoneos --show-sdk-version)
           echo "iOS-SDK: $SDKV"
           if [ "${SDKV%%.*}" -ge 27 ]; then echo "EXTRA_FLAGS=SDK27" >> "$GITHUB_ENV"; else echo "EXTRA_FLAGS=" >> "$GITHUB_ENV"; echo "::warning::Kein iOS-27-SDK am Runner – Apple-Intelligence-Feinprüfung wird ohne gebaut"; fi
+
+      - name: Modell einbinden
+        uses: actions/download-artifact@v4
+        with:
+          name: nsfw-model
+          path: model/NSFW.mlpackage
 
       - name: Werkzeuge
         run: brew install xcodegen ldid
@@ -47,6 +81,8 @@ jobs:
       - name: Entitlements eintragen + IPA packen
         run: |
           APP=build/Build/Products/Release-iphoneos/FotoSortierer.app
+          xcrun coremlcompiler compile model/NSFW.mlpackage "$APP"
+          ls -d "$APP"/NSFW.mlmodelc && du -sh "$APP"/NSFW.mlmodelc
           ldid -SFotoSortierer.entitlements "$APP/FotoSortierer"
           mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry Ablage.ipa Payload

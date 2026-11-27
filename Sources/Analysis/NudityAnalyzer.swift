@@ -5,15 +5,16 @@ import Vision
 
 /// 1) Apples SensitiveContentAnalysis (wie NudeFndr), komplett lokal.
 ///    Braucht Entitlement + in iOS „Hinweis auf sensible Inhalte“.
-/// 2) Ersatz: ein eigenes Core-ML-Modell `NSFW.mlmodelc` im App-Bundle (optional).
-///    Greift, wenn (1) nicht verfügbar ist – z. B. falls die Berechtigung beim
-///    Sideloaden nicht mitsigniert wird. Ohne gebündeltes Modell bleibt es aus.
+/// 2) Ersatz: Core-ML-Modell `NSFW` im App-Bundle (GantMan nsfw_model, MobileNet v2,
+///    Klassen drawings/hentai/neutral/porn/sexy). Wird beim Build automatisch umgewandelt.
+///    Für Nacktbilder greift es nur, wenn (1) nicht verfügbar ist (z. B. LiveContainer);
+///    „sexy“ hilft immer bei der Kategorie „Freizügig“.
 final class NudityAnalyzer: @unchecked Sendable {
     private let analyzer = SCSensitivityAnalyzer()
     private let fallback: VNCoreMLModel?
 
-    /// Klassen-Namen gängiger offener NSFW-Klassifizierer (z. B. „nsfw“, „porn“, „hentai“, „sexy“).
-    private let nsfwLabels: Set<String> = ["nsfw", "porn", "hentai", "unsafe", "explicit", "nude", "sexy"]
+    private let nudeLabels: Set<String> = ["porn", "hentai", "nsfw", "explicit", "nude"]
+    private let sexyLabels: Set<String> = ["sexy"]
 
     init() {
         if let url = Bundle.main.url(forResource: "NSFW", withExtension: "mlmodelc"),
@@ -44,12 +45,16 @@ final class NudityAnalyzer: @unchecked Sendable {
         return try? await analyzer.analyzeImage(image).isSensitive
     }
 
-    func fallbackScore(_ image: CGImage) -> Float? {
+    /// (nackt, freizügig) jeweils 0…1, oder nil ohne Modell.
+    func modelScores(_ image: CGImage) -> (nude: Float, sexy: Float)? {
         guard let fallback else { return nil }
         let req = VNCoreMLRequest(model: fallback)
-        req.imageCropAndScaleOption = .centerCrop
+        req.imageCropAndScaleOption = .scaleFill   // so wurde das Modell trainiert (224×224, gestaucht)
         do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([req]) } catch { return nil }
         let obs = (req.results as? [VNClassificationObservation]) ?? []
-        return obs.filter { nsfwLabels.contains($0.identifier.lowercased()) }.map(\.confidence).max() ?? 0
+        func score(_ set: Set<String>) -> Float {
+            obs.filter { set.contains($0.identifier.lowercased()) }.map(\.confidence).reduce(0, +)
+        }
+        return (min(1, score(nudeLabels)), min(1, score(sexyLabels)))
     }
 }

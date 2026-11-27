@@ -107,7 +107,8 @@ struct SettingsView: View {
                 Section("Nacktbilder") {
                     Text(engine.nudity.statusText).font(.footnote)
                     if engine.nudity.fallbackAvailable {
-                        slider("Ersatzmodell ab", value: $engine.settings.t.nsfwModel, range: 0.3...0.99)
+                        slider("Ersatzmodell nackt ab", value: $engine.settings.t.nsfwModel, range: 0.3...0.99)
+                        slider("Ersatzmodell freizügig ab", value: $engine.settings.t.sexyModel, range: 0.3...0.99)
                     }
                 }
 

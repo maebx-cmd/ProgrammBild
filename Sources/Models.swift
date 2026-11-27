@@ -78,7 +78,7 @@ struct PersonSignals: Codable, Hashable {
 }
 
 struct AssetResult: Codable, Hashable, Identifiable {
-    static let pipelineVersion = 3
+    static let pipelineVersion = 4
 
     let id: String                 // PHAsset.localIdentifier
     var modified: Date?
@@ -86,7 +86,8 @@ struct AssetResult: Codable, Hashable, Identifiable {
     var handled = false            // verschoben/ignoriert/gelöscht
 
     var sensitive: Bool?           // Apple
-    var nsfwScore: Float?          // eigenes Modell (optional gebündelt)
+    var nsfwScore: Float?          // Ersatzmodell: porn + hentai
+    var sexyScore: Float?          // Ersatzmodell: sexy (→ Freizügig)
     var person: PersonSignals?
     var facePrints: [Data] = []    // archivierte VNFeaturePrintObservation je Gesicht
     var isScreenshot = false
@@ -107,6 +108,7 @@ struct Thresholds: Codable, Equatable {
     var minLabelConfidence: Float = 0.25
     var revealingLabel: Float = 0.3
     var nsfwModel: Float = 0.7
+    var sexyModel: Float = 0.6
     var faceMatchDistance: Float = 0.6   // kleiner = strenger „ist dieselbe Person“
 }
 
