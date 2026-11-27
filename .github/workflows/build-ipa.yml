@@ -1,0 +1,65 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Neuestes Xcode wählen
+        run: |
+          ls -d /Applications/Xcode*.app
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
+      - name: Werkzeuge
+        run: brew install xcodegen ldid
+
+      - name: Projekt erzeugen
+        run: xcodegen generate
+
+      - name: Bauen (unsigniert)
+        run: |
+          set -o pipefail
+          xcodebuild -project FotoSortierer.xcodeproj -scheme FotoSortierer \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee build.log | grep -E "error:|warning: .*FotoSortierer|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/FotoSortierer.app
+
+      - name: Entitlements eintragen + IPA packen
+        run: |
+          APP=build/Build/Products/Release-iphoneos/FotoSortierer.app
+          ldid -SFotoSortierer.entitlements "$APP/FotoSortierer"
+          mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry Ablage.ipa Payload
+          ls -lh Ablage.ipa
+
+      - name: Build-Log bei Fehler
+        if: failure()
+        run: grep -E "error:" -A3 build.log | head -120 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ablage-ipa
+          path: Ablage.ipa
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" Ablage.ipa \
+            --title "Ablage Build ${{ github.run_number }}" \
+            --notes "Unsignierte IPA für SideStore/LiveContainer. Commit ${{ github.sha }}"
