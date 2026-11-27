@@ -76,8 +76,16 @@ struct MoveSheet: View {
             target = .new(newName.trimmingCharacters(in: .whitespaces))
         }
         do {
-            try await PhotoLibrary.move(ids, to: target,
-                                        options: .init(removeFromOtherAlbums: removeFromOthers, hide: hide))
+            let files = ids.compactMap(ImportStore.url(for:))
+            let assets = ids.filter { !$0.hasPrefix("file:") }
+            if !files.isEmpty {
+                // Importierte Dateien: in die Mediathek übernehmen + ins Album
+                try await PhotoLibrary.importFilesToAlbum(files, target: target)
+            }
+            if !assets.isEmpty {
+                try await PhotoLibrary.move(assets, to: target,
+                                            options: .init(removeFromOtherAlbums: removeFromOthers, hide: hide))
+            }
             onDone()
             dismiss()
         } catch {

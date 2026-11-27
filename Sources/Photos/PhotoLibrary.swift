@@ -51,6 +51,72 @@ enum PhotoLibrary {
         }
     }
 
+    /// Alle Asset-IDs eines Albums.
+    static func assetIDs(inAlbum id: String) -> Set<String> {
+        guard let c = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
+        else { return [] }
+        var out = Set<String>()
+        PHAsset.fetchAssets(in: c, options: nil).enumerateObjects { a, _, _ in out.insert(a.localIdentifier) }
+        return out
+    }
+
+    static func assets(inAlbum id: String, includeVideos: Bool) -> [PHAsset] {
+        guard let c = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
+        else { return [] }
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        if !includeVideos { opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue) }
+        var out: [PHAsset] = []
+        PHAsset.fetchAssets(in: c, options: opts).enumerateObjects { a, _, _ in out.append(a) }
+        return out
+    }
+
+    /// Alle Alben (eigene + Smart-Alben wie Selfies, Screenshots), zum Eingrenzen der Analyse.
+    static func allAlbums() -> [PHAssetCollection] {
+        var out: [PHAssetCollection] = []
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "localizedTitle", ascending: true)]
+        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: opts)
+            .enumerateObjects { c, _, _ in out.append(c) }
+        let smart: [PHAssetCollectionSubtype] = [.smartAlbumSelfPortraits, .smartAlbumScreenshots, .smartAlbumFavorites,
+                                                 .smartAlbumVideos, .smartAlbumRecentlyAdded, .smartAlbumUserLibrary]
+        for st in smart {
+            PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: st, options: nil)
+                .enumerateObjects { c, _, _ in out.append(c) }
+        }
+        return out
+    }
+
+    static func title(ofAlbum id: String) -> String? {
+        PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject?.localizedTitle
+    }
+
+    /// Importierte Dateien in die Mediathek übernehmen und ins Album legen.
+    static func importFilesToAlbum(_ files: [URL], target: Target) async throws {
+        let album: PHAssetCollection
+        switch target {
+        case .existing(let c): album = c
+        case .new(let name):
+            var ph: PHObjectPlaceholder?
+            try await PHPhotoLibrary.shared().performChanges {
+                ph = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name).placeholderForCreatedAssetCollection
+            }
+            guard let id = ph?.localIdentifier,
+                  let c = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
+            else { throw CocoaError(.fileWriteUnknown) }
+            album = c
+        }
+        try await PHPhotoLibrary.shared().performChanges {
+            var placeholders: [PHObjectPlaceholder] = []
+            for f in files {
+                if let p = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: f)?.placeholderForCreatedAsset {
+                    placeholders.append(p)
+                }
+            }
+            PHAssetCollectionChangeRequest(for: album)?.addAssets(placeholders as NSArray)
+        }
+    }
+
     struct MoveOptions {
         var removeFromOtherAlbums = false
         var hide = false

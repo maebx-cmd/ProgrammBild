@@ -54,11 +54,22 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    slider("Mann/Frau ab Anteil", value: $engine.settings.t.genderShare, range: 0.5...0.95)
+                    slider("Person mindestens", value: $engine.settings.t.genderMinPerson, range: 0.05...0.8)
+                } header: {
+                    Text("Frauen / Männer")
+                } footer: {
+                    Text(engine.clip.isAvailable
+                         ? "Apples MobileCLIP schätzt lokal nach Aussehen ein. Paarfotos landen in beiden Kategorien. Fehleinschätzungen sind möglich."
+                         : "MobileCLIP ist in diesem Build nicht enthalten.")
+                }
+
+                Section {
                     Toggle("Nur Treffer mit Frauen", isOn: $engine.settings.womenOnly)
                 } header: {
                     Text("Filter")
                 } footer: {
-                    Text("Gilt für „Freizügig“, „Andere Personen“ und „Social-Media-Speicherungen“. Apple Intelligence beantwortet bei der Feinprüfung, ob eine Frau zu sehen ist – Treffer ohne Frau werden ausgeblendet. Bis zur Feinprüfung bleibt alles sichtbar. Fehleinschätzungen sind möglich.")
+                    Text("Gilt für „Freizügig“, „Andere Personen“ und „Social-Media-Speicherungen“. Entschieden wird mit MobileCLIP, nach der Feinprüfung mit Apple Intelligence. Fehleinschätzungen sind möglich.")
                 }
 
                 Section {

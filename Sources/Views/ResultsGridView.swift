@@ -12,6 +12,8 @@ struct ResultsGridView: View {
     @State private var detail: String?
     @State private var error: String?
 
+    private var selectedFiles: [URL] { selection.compactMap(ImportStore.url(for:)) }
+
     private var ids: [String] { engine.ids(for: bucket) }
     private let columns = [GridItem(.adaptive(minimum: 96), spacing: 2)]
     private var blurred: Bool { engine.settings.blurPreviews && !reveal }
@@ -53,7 +55,10 @@ struct ResultsGridView: View {
                     Button("Ignorieren", systemImage: "hand.thumbsup") {
                         engine.markHandled(Array(selection)); selection = []
                     }
-                    Button("Aus Mediathek löschen", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                    if !selectedFiles.isEmpty {
+                        ShareLink(items: selectedFiles) { Label("Exportieren …", systemImage: "square.and.arrow.up") }
+                    }
+                    Button(selectedFiles.isEmpty ? "Aus Mediathek löschen" : "Löschen", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .disabled(selection.isEmpty)
                 Spacer()
@@ -73,7 +78,9 @@ struct ResultsGridView: View {
                 }
             }
         } message: {
-            Text("Sie landen in „Zuletzt gelöscht“. Dort in der Fotos-App endgültig löschen. Mit iCloud-Fotos verschwinden sie auf allen Geräten.")
+            Text(selectedFiles.count == selection.count
+                 ? "Die importierten Kopien werden aus der App gelöscht. Die Originaldateien in „Dateien“ bleiben unverändert."
+                 : "Sie landen in „Zuletzt gelöscht“. Dort in der Fotos-App endgültig löschen. Mit iCloud-Fotos verschwinden sie auf allen Geräten.")
         }
         .sheet(isPresented: $showMove) {
             MoveSheet(ids: Array(selection), suggestedName: suggestedAlbum) {
@@ -126,6 +133,10 @@ struct ThumbCell: View {
             }
             .overlay { if selected { Rectangle().stroke(Color.accentColor, lineWidth: 3) } }
             .task(id: id) {
+                if let url = ImportStore.url(for: id) {
+                    image = await ImageLoader.fileThumbnail(url, side: 120)
+                    return
+                }
                 guard let asset = PhotoLibrary.assets([id]).first else { return }
                 image = await ImageLoader.thumbnail(for: asset, side: 120)
             }

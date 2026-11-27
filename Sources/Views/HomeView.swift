@@ -4,6 +4,8 @@ struct HomeView: View {
     @EnvironmentObject var engine: ScanEngine
     @AppStorage("scope") private var scope: ScanScope = .all
     @State private var showSettings = false
+    @State private var showImporter = false
+    @State private var showAlbumPicker = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +34,10 @@ struct HomeView: View {
                     .accessibilityLabel("Einstellungen")
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showAlbumPicker) { AlbumPickerSheet() }
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result { engine.importFiles(urls) }
+            }
         }
     }
 
@@ -46,15 +52,49 @@ struct HomeView: View {
         .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
     }
 
+    private var sourceSymbol: String {
+        switch engine.settings.source {
+        case .library: return "photo.on.rectangle"
+        case .album: return "rectangle.stack"
+        case .imported: return "folder"
+        }
+    }
+
     private var busy: Bool { engine.phase == .scanning || engine.phase == .refining }
 
     private var scanCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("1 · Schneller Scan").font(.headline)
-            Picker("Bereich", selection: $scope) {
-                ForEach(ScanScope.allCases) { Text($0.title).tag($0) }
+
+            Menu {
+                Button("Ganze Mediathek", systemImage: "photo.on.rectangle") { engine.setSource(.library) }
+                Button("Ein Album wählen …", systemImage: "rectangle.stack") { showAlbumPicker = true }
+                Button("Importierte Dateien", systemImage: "folder") { engine.setSource(.imported) }
+            } label: {
+                HStack {
+                    Image(systemName: sourceSymbol)
+                    Text("Quelle: \(engine.sourceTitle)").lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                }
+                .padding(10)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
             }
-            .pickerStyle(.segmented)
+            .disabled(busy)
+
+            if engine.settings.source == .library {
+                Picker("Bereich", selection: $scope) {
+                    ForEach(ScanScope.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .disabled(busy)
+            }
+
+            Button { showImporter = true } label: {
+                Label("Bilder aus Dateien importieren", systemImage: "square.and.arrow.down.on.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
             .disabled(busy)
 
             if !engine.nudity.appleAvailable {
@@ -65,7 +105,7 @@ struct HomeView: View {
                 progress
             } else {
                 Button { engine.start(scope: scope) } label: {
-                    Label(engine.results.isEmpty ? "Scan starten" : "Neue Fotos scannen", systemImage: "sparkle.magnifyingglass")
+                    Label(engine.results.isEmpty ? "Scan starten" : "Neue/fehlende scannen", systemImage: "sparkle.magnifyingglass")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
@@ -127,6 +167,7 @@ struct BucketRow: View {
     private var tint: Color {
         switch bucket {
         case .builtin(.nude), .builtin(.revealing): return .pink
+        case .builtin(.women), .builtin(.men): return .orange
         case .custom: return .teal
         default: return .indigo
         }

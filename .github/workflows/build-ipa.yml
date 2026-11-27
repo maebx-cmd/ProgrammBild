@@ -30,10 +30,8 @@ jobs:
           pip install -q "tensorflow-cpu==2.12.*" "tensorflow-hub==0.13.*" "coremltools==7.2" "numpy<1.24"
           curl -fL --retry 3 -o nsfw.zip https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip
           unzip -q nsfw.zip -d nsfw_src
-          find nsfw_src -maxdepth 4 | head -40
           SRC=$(dirname "$(find nsfw_src -name saved_model.pb | head -1)")
           LBL=$(find nsfw_src -name class_labels.txt | head -1)
-          echo "Quelle: $SRC"; echo "Klassen:"; cat "$LBL"
           python tools/convert_nsfw.py "$SRC" NSFW.mlpackage "$LBL"
       - uses: actions/upload-artifact@v4
         with:
@@ -42,27 +40,44 @@ jobs:
 
   build:
     needs: model
-    runs-on: macos-26
-    timeout-minutes: 40
+    # Eigenes Runner-Image mit Xcode 27 / iOS-27-SDK (für Apple Intelligence mit Bildern)
+    runs-on: xcode-27
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Neuestes Xcode wählen
+      - name: Xcode wählen
         run: |
           ls -d /Applications/Xcode*.app
-          XC=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
-          sudo xcode-select -s "$XC"
+          sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
-          xcodebuild -showsdks | grep -i iphoneos
           SDKV=$(xcrun --sdk iphoneos --show-sdk-version)
           echo "iOS-SDK: $SDKV"
-          if [ "${SDKV%%.*}" -ge 27 ]; then echo "EXTRA_FLAGS=SDK27" >> "$GITHUB_ENV"; else echo "EXTRA_FLAGS=" >> "$GITHUB_ENV"; echo "::warning::Kein iOS-27-SDK am Runner – Apple-Intelligence-Feinprüfung wird ohne gebaut"; fi
+          if [ "${SDKV%%.*}" -ge 27 ]; then echo "EXTRA_FLAGS=SDK27" >> "$GITHUB_ENV"; else echo "EXTRA_FLAGS=" >> "$GITHUB_ENV"; echo "::warning::Kein iOS-27-SDK – Apple-Intelligence-Feinprüfung wird ohne gebaut"; fi
 
       - name: Modell einbinden
         uses: actions/download-artifact@v4
         with:
           name: nsfw-model
           path: model/NSFW.mlpackage
+
+      - name: MobileCLIP aus dem Cache
+        id: clipcache
+        uses: actions/cache@v4
+        with:
+          path: clip_out
+          key: mobileclip-s0-v1-${{ hashFiles('tools/prepare_clip.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.clipcache.outputs.cache-hit != 'true'
+        with:
+          python-version: "3.11"
+
+      - name: MobileCLIP vorbereiten (Mann/Frau-Erkennung)
+        if: steps.clipcache.outputs.cache-hit != 'true'
+        run: |
+          pip install -q "coremltools>=8.0" "transformers>=4.40" "huggingface_hub>=0.23" numpy
+          python tools/prepare_clip.py clip_out
 
       - name: Werkzeuge
         run: brew install xcodegen ldid
@@ -72,7 +87,6 @@ jobs:
 
       - name: Bauen (unsigniert)
         run: |
-          set -o pipefail
           xcodebuild -project FotoSortierer.xcodeproj -scheme FotoSortierer \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
@@ -82,11 +96,13 @@ jobs:
           grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | head -60
           grep -q "BUILD SUCCEEDED" build.log
 
-      - name: Entitlements eintragen + IPA packen
+      - name: Modelle einpacken, Entitlements, IPA
         run: |
           APP=build/Build/Products/Release-iphoneos/FotoSortierer.app
           xcrun coremlcompiler compile model/NSFW.mlpackage "$APP"
-          ls -d "$APP"/NSFW.mlmodelc && du -sh "$APP"/NSFW.mlmodelc
+          xcrun coremlcompiler compile clip_out/CLIPImage.mlpackage "$APP"
+          cp clip_out/CLIPClasses.json "$APP/"
+          du -sh "$APP"/*.mlmodelc
           ldid -SFotoSortierer.entitlements "$APP/FotoSortierer"
           mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry Ablage.ipa Payload
@@ -106,5 +122,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "build-${{ github.run_number }}" Ablage.ipa \
-            --title "Ablage Build ${{ github.run_number }}" \
+            --title "Ablage Build ${{ github.run_number }} (iOS-SDK ${EXTRA_FLAGS:-26})" \
             --notes "Unsignierte IPA für SideStore/LiveContainer. Commit ${{ github.sha }}"

@@ -87,6 +87,29 @@ enum ImageLoader {
         }
     }
 
+    /// Importierte Datei laden (gleiches Format wie aus der Mediathek).
+    static func analysisImage(fileURL: URL, maxPixel: Int = 1024) -> LoadedImage? {
+        guard let src = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
+        let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let hasCamera = tiff?[kCGImagePropertyTIFFMake] != nil || exif?[kCGImagePropertyExifLensModel] != nil
+        let o: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, o as CFDictionary) else { return nil }
+        return LoadedImage(cg: cg, hasCamera: hasCamera)
+    }
+
+    static func fileThumbnail(_ url: URL, side: CGFloat) async -> UIImage? {
+        let px = await Int(side * UIScreen.main.scale)
+        return await Task.detached(priority: .userInitiated) {
+            analysisImage(fileURL: url, maxPixel: px).map { UIImage(cgImage: $0.cg) }
+        }.value
+    }
+
     static func cgImage(from data: Data, maxPixel: Int = 1024) -> CGImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let o: [CFString: Any] = [

@@ -9,6 +9,8 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
     case chats         // Screenshots von Chats, Dating-Apps, Profilen
     case social        // gespeichert aus TikTok/Instagram/Reels (Wasserzeichen, Hochformat-Video)
     case received      // ohne Kamera-Metadaten → empfangen (WhatsApp, Snapchat …)
+    case women         // MobileCLIP: Frau(en) zu sehen
+    case men           // MobileCLIP: Mann/Männer zu sehen
 
     var id: String { rawValue }
 
@@ -20,6 +22,8 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
         case .chats:       return "Chats & App-Screenshots"
         case .social:      return "Social-Media-Speicherungen"
         case .received:    return "Empfangen"
+        case .women:       return "Frauen"
+        case .men:         return "Männer"
         }
     }
 
@@ -31,6 +35,8 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
         case .chats:       return "Text im Bild + deine Stichwörter"
         case .social:      return "TikTok, Reels, Instagram – auch Videos"
         case .received:    return "Keine Kamera-Daten, kein Social-Media-Logo"
+        case .women:       return "Einschätzung nach Aussehen (MobileCLIP)"
+        case .men:         return "Einschätzung nach Aussehen (MobileCLIP)"
         }
     }
 
@@ -42,6 +48,8 @@ enum ScanCategory: String, CaseIterable, Identifiable, Codable {
         case .chats:       return "bubble.left.and.text.bubble.right.fill"
         case .social:      return "play.rectangle.on.rectangle.fill"
         case .received:    return "tray.and.arrow.down.fill"
+        case .women:       return "figure.stand.dress"
+        case .men:         return "figure.stand"
         }
     }
 }
@@ -78,7 +86,7 @@ struct PersonSignals: Codable, Hashable {
 }
 
 struct AssetResult: Codable, Hashable, Identifiable {
-    static let pipelineVersion = 4
+    static let pipelineVersion = 5
 
     let id: String                 // PHAsset.localIdentifier
     var modified: Date?
@@ -88,6 +96,12 @@ struct AssetResult: Codable, Hashable, Identifiable {
     var sensitive: Bool?           // Apple
     var nsfwScore: Float?          // Ersatzmodell: porn + hentai
     var sexyScore: Float?          // Ersatzmodell: sexy (→ Freizügig)
+    var clipWoman: Float?          // MobileCLIP-Wahrscheinlichkeit „Frau“ (max. über Einzelbilder)
+    var clipMan: Float?            // MobileCLIP-Wahrscheinlichkeit „Mann“
+
+    /// Aus „Dateien“ importiert statt aus der Mediathek (id = "file:<Dateiname>").
+    var isImported: Bool { id.hasPrefix("file:") }
+    var fileName: String? { isImported ? String(id.dropFirst(5)) : nil }
     var person: PersonSignals?
     var facePrints: [Data] = []    // archivierte VNFeaturePrintObservation je Gesicht
     var isScreenshot = false
@@ -109,6 +123,8 @@ struct Thresholds: Codable, Equatable {
     var revealingLabel: Float = 0.3
     var nsfwModel: Float = 0.7
     var sexyModel: Float = 0.6
+    var genderShare: Float = 0.65     // Anteil Frau bzw. Mann an (Frau + Mann), ab dem zugeordnet wird
+    var genderMinPerson: Float = 0.3  // Frau + Mann zusammen mindestens (sonst „keine Person“)
     var faceMatchDistance: Float = 0.6   // kleiner = strenger „ist dieselbe Person“
 }
 
@@ -127,7 +143,8 @@ struct AppSettings: Codable, Equatable {
     var socialMarkers: [String] = [
         "tiktok", "instagram", "reels", "capcut", "youtube", "shorts", "snapchat", "pinterest", "@"
     ]
-    var womenOnly = false               // Personen-Kategorien auf Frauen eingrenzen (Apple Intelligence)
+    var womenOnly = false               // Personen-Kategorien auf Frauen eingrenzen (MobileCLIP / Apple Intelligence)
+    var source: SourceScope = .library  // Mediathek, ein Album oder importierte Dateien
     var includeVideos = true
     var references: [ReferenceFace] = []
     var facelessCountsAsOther = true     // Körper ohne Gesicht → „Andere Personen“
@@ -138,6 +155,13 @@ struct AppSettings: Codable, Equatable {
     var allowICloud = false
     var blurPreviews = true
     var concurrency = 3
+}
+
+/// Woher die analysierten Bilder kommen.
+enum SourceScope: Codable, Hashable {
+    case library               // ganze Mediathek (mit Zeitraum)
+    case album(String)         // nur ein Album (localIdentifier)
+    case imported              // aus „Dateien“ importiert
 }
 
 enum ScanScope: String, CaseIterable, Identifiable, Codable {
@@ -178,8 +202,11 @@ enum Lenient {
         guard let dd = try? JSONEncoder().encode(defaults),
               var base = try? JSONSerialization.jsonObject(with: dd) as? [String: Any] else { return nil }
         for (k, v) in stored {
-            if let sub = v as? [String: Any], let b = base[k] as? [String: Any] {
-                base[k] = b.merging(sub) { _, new in new }   // eine Ebene tief (z. B. Thresholds)
+            if let sub = v as? [String: Any], let b = base[k] as? [String: Any],
+               Set(sub.keys).isSubset(of: Set(b.keys)) {
+                // Struktur mit neuen Feldern (z. B. Thresholds): eine Ebene tief zusammenführen.
+                // Enums mit anderem Fall (z. B. source = album) werden unten ganz ersetzt.
+                base[k] = b.merging(sub) { _, new in new }
             } else {
                 base[k] = v
             }

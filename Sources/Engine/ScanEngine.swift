@@ -21,6 +21,10 @@ final class ScanEngine: ObservableObject {
 
     let nudity = NudityAnalyzer()
     let person = PersonAnalyzer()
+    let clip = ClipAnalyzer()
+
+    /// Asset-IDs des gewählten Albums (nur bei Quelle = Album).
+    @Published private(set) var albumIDs: Set<String> = []
 
     private var task: Task<Void, Never>?
     private var recomputeTask: Task<Void, Never>?
@@ -37,7 +41,41 @@ final class ScanEngine: ObservableObject {
         settings = UserDefaults.standard.data(forKey: "settings")
             .flatMap { Lenient.decode($0, defaults: AppSettings()) } ?? AppSettings()
         load()
+        refreshAlbumIDs()
         recompute()
+    }
+
+    // MARK: - Quelle (Mediathek / Album / Dateien)
+
+    var sourceTitle: String {
+        switch settings.source {
+        case .library: return "Mediathek"
+        case .album(let id): return PhotoLibrary.title(ofAlbum: id) ?? "Album"
+        case .imported: return "Importierte Dateien"
+        }
+    }
+
+    func setSource(_ s: SourceScope) {
+        settings.source = s
+        refreshAlbumIDs()
+        recompute()
+    }
+
+    private func refreshAlbumIDs() {
+        if case .album(let id) = settings.source,
+           PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized || PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited {
+            albumIDs = PhotoLibrary.assetIDs(inAlbum: id)
+        } else {
+            albumIDs = []
+        }
+    }
+
+    private func inSource(_ r: AssetResult) -> Bool {
+        switch settings.source {
+        case .library: return !r.isImported
+        case .album: return albumIDs.contains(r.id)
+        case .imported: return r.isImported
+        }
     }
 
     // MARK: - Abfragen
@@ -62,7 +100,7 @@ final class ScanEngine: ObservableObject {
         var set = Set<String>()
         for c in cats { set.formUnion(rawHeuristic(c)) }
         if settings.llmAllPhotos && !settings.custom.isEmpty {
-            set.formUnion(results.values.filter { !$0.handled }.map(\.id))
+            set.formUnion(results.values.filter { !$0.handled && inSource($0) }.map(\.id))
         }
         return Array(set)
     }
@@ -82,14 +120,14 @@ final class ScanEngine: ObservableObject {
         referenceCache = settings.references.compactMap { PersonAnalyzer.decode($0.print) }
         var out: [Bucket: [String]] = [:]
         for b in allBuckets { out[b] = [] }
-        for r in results.values where !r.handled {
+        for r in results.values where !r.handled && inSource(r) {
             for b in allBuckets where belongs(r, to: b) { out[b, default: []].append(r.id) }
         }
         buckets = out
     }
 
     private func rawHeuristic(_ c: ScanCategory) -> [String] {
-        results.values.filter { !$0.handled && heuristic($0, c) }.map(\.id)
+        results.values.filter { !$0.handled && inSource($0) && heuristic($0, c) }.map(\.id)
     }
 
     /// Stufe-1-Entscheidung ohne Sprachmodell.
@@ -119,6 +157,10 @@ final class ScanEngine: ObservableObject {
                 || (r.isScreenshot && (r.ocrText?.count ?? 0) > 40)   // textreicher Screenshot → Kandidat
         case .social:
             return isSocial(r)
+        case .women:
+            return genderShare(r).map { $0 >= t.genderShare || ($0 > 1 - t.genderShare && bothGenders(r)) } ?? false
+        case .men:
+            return genderShare(r).map { $0 <= 1 - t.genderShare || ($0 < t.genderShare && bothGenders(r)) } ?? false
         case .received:
             return !r.hasCamera && !r.isScreenshot && !isSocial(r)
         }
@@ -132,6 +174,27 @@ final class ScanEngine: ObservableObject {
         return r.isVideo && r.isPortraitVideoish
     }
 
+    /// Anteil „Frau“ an (Frau + Mann) laut MobileCLIP – nur wenn überhaupt ein Mensch zu sehen ist.
+    private func genderShare(_ r: AssetResult) -> Float? {
+        guard let w = r.clipWoman, let m = r.clipMan, w + m >= settings.t.genderMinPerson else { return nil }
+        if let s = r.person, !PersonAnalyzer.isPerson(s, settings.t) { return nil }
+        return w / (w + m)
+    }
+
+    /// Beide deutlich vertreten (z. B. Paarfoto) → in beiden Kategorien.
+    private func bothGenders(_ r: AssetResult) -> Bool {
+        (r.clipWoman ?? 0) >= 0.25 && (r.clipMan ?? 0) >= 0.25
+    }
+
+    /// „Frau zu sehen?“ – Apple Intelligence, sonst MobileCLIP, sonst unbekannt (nil).
+    private func womanVisible(_ r: AssetResult) -> Bool? {
+        if let v = r.llm[LLMJudge.qWoman] { return v }
+        if let w = r.clipWoman, let m = r.clipMan, w + m >= settings.t.genderMinPerson {
+            return w / (w + m) >= 0.5 || (r.clipWoman ?? 0) >= 0.25
+        }
+        return nil
+    }
+
     /// Kategorien, in denen Menschen gezeigt werden – dort greift der Filter „nur Frauen“.
     private static let personBuckets: Set<ScanCategory> = [.revealing, .otherPeople, .social]
 
@@ -141,12 +204,12 @@ final class ScanEngine: ObservableObject {
         case .builtin(let c):
             // „Nur Frauen“: erst ausblenden, wenn Apple Intelligence „nein“ gesagt hat –
             // ungeprüfte Treffer bleiben sichtbar, bis die Feinprüfung gelaufen ist.
-            if settings.womenOnly && Self.personBuckets.contains(c) && r.llm[LLMJudge.qWoman] == false {
+            if settings.womenOnly && Self.personBuckets.contains(c) && womanVisible(r) == false {
                 return false
             }
             let h = heuristic(r, c)
             switch c {
-            case .nude, .received, .social:
+            case .nude, .received, .social, .women, .men:
                 return h
             case .revealing:
                 return h && r.llm[LLMJudge.qRevealing] != false || r.llm[LLMJudge.qRevealing] == true
@@ -182,6 +245,10 @@ final class ScanEngine: ObservableObject {
             out += PersonAnalyzer.reasons(s, settings.t)
         }
         if !r.hasCamera { out.append("Keine Kamera-Metadaten") }
+        if let w = r.clipWoman, let m = r.clipMan {
+            out.append("MobileCLIP: Frau \(Int(w * 100)) % · Mann \(Int(m * 100)) %")
+        }
+        if r.isImported { out.append("Importiert aus Dateien") }
         if r.isScreenshot { out.append("Screenshot") }
         if r.isVideo { out.append(r.isPortraitVideoish ? "Video im Hochformat" : "Video") }
         let sm = TextAnalyzer.hits(in: r.ocrText, keywords: settings.socialMarkers)
@@ -197,34 +264,70 @@ final class ScanEngine: ObservableObject {
 
     // MARK: - Stufe 1: Scan
 
+    private enum WorkItem: @unchecked Sendable {
+        case asset(PHAsset)
+        case file(String)
+    }
+
     func start(scope: ScanScope) {
         guard phase != .scanning, phase != .refining else { return }
         task = Task {
-            let status = await PhotoLibrary.requestAccess()
-            guard status == .authorized || status == .limited else { phase = .needsAccess; return }
-
-            phase = .scanning
-            let assets = PhotoLibrary.fetchMedia(since: scope.since, includeVideos: settings.includeVideos)
-            let todo = assets.filter { a in
-                guard let r = results[a.localIdentifier] else { return true }
-                return r.modified != a.modificationDate || r.version < AssetResult.pipelineVersion
+            var items: [WorkItem] = []
+            if case .imported = settings.source {
+                items = ImportStore.allIDs()
+                    .filter { (results[$0]?.version ?? 0) < AssetResult.pipelineVersion }
+                    .map { .file($0) }
+            } else {
+                let status = await PhotoLibrary.requestAccess()
+                guard status == .authorized || status == .limited else { phase = .needsAccess; return }
+                refreshAlbumIDs(); recompute()
+                let assets: [PHAsset]
+                if case .album(let id) = settings.source {
+                    assets = PhotoLibrary.assets(inAlbum: id, includeVideos: settings.includeVideos)
+                } else {
+                    assets = PhotoLibrary.fetchMedia(since: scope.since, includeVideos: settings.includeVideos)
+                }
+                items = assets.filter { a in
+                    guard let r = results[a.localIdentifier] else { return true }
+                    return r.modified != a.modificationDate || r.version < AssetResult.pipelineVersion
+                }.map { .asset($0) }
             }
+            await run(items)
+        }
+    }
+
+    /// Dateien importieren und sofort analysieren.
+    func importFiles(_ urls: [URL]) {
+        let ids = ImportStore.importFiles(urls)
+        guard !ids.isEmpty else { return }
+        if settings.source != .imported { setSource(.imported) }
+        guard phase != .scanning, phase != .refining else { return }
+        task = Task { await run(ids.map { .file($0) }) }
+    }
+
+    private func run(_ todo: [WorkItem]) async {
+            phase = .scanning
             total = todo.count
             processed = 0
 
             let t = settings.t, net = settings.allowICloud
-            let nudity = self.nudity, person = self.person
+            let nudity = self.nudity, person = self.person, clip = self.clip
             let width = max(1, min(6, settings.concurrency))
             let handledIDs = Set(results.values.filter(\.handled).map(\.id))
 
             await withTaskGroup(of: AssetResult?.self) { group in
                 var it = todo.makeIterator()
                 func enqueue() {
-                    guard let a = it.next() else { return }
-                    let keepHandled = handledIDs.contains(a.localIdentifier)
+                    guard let item = it.next() else { return }
                     group.addTask {
-                        var r = await Self.analyze(a, t: t, net: net, nudity: nudity, person: person)
-                        r?.handled = keepHandled
+                        var r: AssetResult?
+                        switch item {
+                        case .asset(let a):
+                            r = await Self.analyze(a, t: t, net: net, nudity: nudity, person: person, clip: clip)
+                        case .file(let id):
+                            r = await Self.analyzeFile(id, t: t, nudity: nudity, person: person, clip: clip)
+                        }
+                        if let id = r?.id { r?.handled = handledIDs.contains(id) }
                         return r
                     }
                 }
@@ -239,11 +342,19 @@ final class ScanEngine: ObservableObject {
             }
             save(); recompute()
             phase = .done
-        }
+    }
+
+    nonisolated private static func analyzeFile(_ id: String, t: Thresholds, nudity: NudityAnalyzer,
+                                                person: PersonAnalyzer, clip: ClipAnalyzer) async -> AssetResult? {
+        guard let url = ImportStore.url(for: id), let img = ImageLoader.analysisImage(fileURL: url) else { return nil }
+        var r = AssetResult(id: id, modified: nil)
+        r.hasCamera = img.hasCamera
+        await analyzeFrames([img.cg], into: &r, t: t, nudity: nudity, person: person, clip: clip)
+        return r
     }
 
     nonisolated private static func analyze(_ asset: PHAsset, t: Thresholds, net: Bool,
-                                            nudity: NudityAnalyzer, person: PersonAnalyzer) async -> AssetResult? {
+                                            nudity: NudityAnalyzer, person: PersonAnalyzer, clip: ClipAnalyzer) async -> AssetResult? {
         var r = AssetResult(id: asset.localIdentifier, modified: asset.modificationDate)
         r.isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
         r.isVideo = asset.mediaType == .video
@@ -261,7 +372,13 @@ final class ScanEngine: ObservableObject {
             r.hasCamera = img.hasCamera
         }
 
-        // Jedes Einzelbild prüfen, Ergebnisse zusammenführen (Maximum je Signal)
+        await analyzeFrames(frames, into: &r, t: t, nudity: nudity, person: person, clip: clip)
+        return r
+    }
+
+    /// Jedes Einzelbild prüfen, Ergebnisse zusammenführen (Maximum je Signal).
+    nonisolated private static func analyzeFrames(_ frames: [CGImage], into r: inout AssetResult, t: Thresholds,
+                                                  nudity: NudityAnalyzer, person: PersonAnalyzer, clip: ClipAnalyzer) async {
         var texts: [String] = []
         for f in frames {
             if let s = await nudity.appleSensitive(f) { r.sensitive = (r.sensitive ?? false) || s }
@@ -273,11 +390,14 @@ final class ScanEngine: ObservableObject {
                 r.person = Self.merge(r.person, out.signals)
                 r.facePrints = Array((r.facePrints + out.facePrints).prefix(6))
             }
+            if let p = clip.probabilities(f) {
+                r.clipWoman = max(r.clipWoman ?? 0, p["woman"] ?? 0)
+                r.clipMan = max(r.clipMan ?? 0, p["man"] ?? 0)
+            }
             // Text nur dort lesen, wo Chats/Wasserzeichen wahrscheinlich sind (spart viel Zeit)
             if r.isScreenshot || !r.hasCamera, let txt = TextAnalyzer.recognize(f) { texts.append(txt) }
         }
         if !texts.isEmpty { r.ocrText = texts.joined(separator: "\n") }
-        return r
     }
 
     nonisolated private static func merge(_ a: PersonSignals?, _ b: PersonSignals) -> PersonSignals {
@@ -305,8 +425,7 @@ final class ScanEngine: ObservableObject {
             let verify = settings.llmVerify
             for id in ids {
                 if Task.isCancelled { break }
-                guard var r = results[id], let asset = PhotoLibrary.assets([id]).first,
-                      let cg = await Self.refineImage(asset, allowNetwork: settings.allowICloud)
+                guard var r = results[id], let cg = await Self.refineImage(id, allowNetwork: settings.allowICloud)
                 else { processed += 1; continue }
 
                 var keys: [String] = []
@@ -337,7 +456,9 @@ final class ScanEngine: ObservableObject {
     }
 
     /// Für Fotos das Bild, für Videos das mittlere Einzelbild.
-    private static func refineImage(_ asset: PHAsset, allowNetwork: Bool) async -> CGImage? {
+    private static func refineImage(_ id: String, allowNetwork: Bool) async -> CGImage? {
+        if let url = ImportStore.url(for: id) { return ImageLoader.analysisImage(fileURL: url, maxPixel: 768)?.cg }
+        guard let asset = PhotoLibrary.assets([id]).first else { return nil }
         if asset.mediaType == .video {
             return await ImageLoader.videoFrames(for: asset, positions: [0.5], maxPixel: 768, allowNetwork: allowNetwork)?.frames.first
         }
@@ -356,7 +477,9 @@ final class ScanEngine: ObservableObject {
     }
 
     func delete(_ ids: [String]) async throws {
-        try await PhotoLibrary.delete(ids)
+        let files = ids.filter { $0.hasPrefix("file:") }
+        ImportStore.remove(files)
+        try await PhotoLibrary.delete(ids.filter { !$0.hasPrefix("file:") })
         for id in ids { results[id] = nil; printCache[id] = nil }
         save(); recompute()
     }
