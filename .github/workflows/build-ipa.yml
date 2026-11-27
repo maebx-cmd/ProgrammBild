@@ -27,11 +27,11 @@ jobs:
       - name: Herunterladen + umwandeln
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          pip install -q "tensorflow-cpu==2.12.*" "coremltools==7.2" "numpy<1.24"
+          pip install -q "tensorflow-cpu==2.12.*" "tensorflow-hub==0.13.*" "coremltools==7.2" "numpy<1.24"
           curl -fL --retry 3 -o nsfw.zip https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip
           unzip -q nsfw.zip -d nsfw_src
           find nsfw_src -maxdepth 4 | head -40
-          SRC=$(find nsfw_src -name saved_model.h5 | head -1)
+          SRC=$(dirname "$(find nsfw_src -name saved_model.pb | head -1)")
           LBL=$(find nsfw_src -name class_labels.txt | head -1)
           echo "Quelle: $SRC"; echo "Klassen:"; cat "$LBL"
           python tools/convert_nsfw.py "$SRC" NSFW.mlpackage "$LBL"
