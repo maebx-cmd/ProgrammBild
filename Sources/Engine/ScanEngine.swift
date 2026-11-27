@@ -210,12 +210,13 @@ final class ScanEngine: ObservableObject {
             let t = settings.t, net = settings.allowICloud
             let nudity = self.nudity, person = self.person
             let width = max(1, min(6, settings.concurrency))
+            let handledIDs = Set(results.values.filter(\.handled).map(\.id))
 
             await withTaskGroup(of: AssetResult?.self) { group in
                 var it = todo.makeIterator()
                 func enqueue() {
                     guard let a = it.next() else { return }
-                    let keepHandled = results[a.localIdentifier]?.handled ?? false
+                    let keepHandled = handledIDs.contains(a.localIdentifier)
                     group.addTask {
                         var r = await Self.analyze(a, t: t, net: net, nudity: nudity, person: person)
                         r?.handled = keepHandled

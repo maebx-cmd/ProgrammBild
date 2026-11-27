@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,9 @@ jobs:
           sudo xcode-select -s "$XC"
           xcodebuild -version
           xcodebuild -showsdks | grep -i iphoneos
+          SDKV=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS-SDK: $SDKV"
+          if [ "${SDKV%%.*}" -ge 27 ]; then echo "EXTRA_FLAGS=SDK27" >> "$GITHUB_ENV"; else echo "EXTRA_FLAGS=" >> "$GITHUB_ENV"; echo "::warning::Kein iOS-27-SDK am Runner – Apple-Intelligence-Feinprüfung wird ohne gebaut"; fi
 
       - name: Werkzeuge
         run: brew install xcodegen ldid
@@ -36,8 +39,10 @@ jobs:
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build | tee build.log | grep -E "error:|warning: .*FotoSortierer|BUILD" || true
-          test -d build/Build/Products/Release-iphoneos/FotoSortierer.app
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS="\$(inherited) $EXTRA_FLAGS" \
+            build > build.log 2>&1 || true
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | head -60
+          grep -q "BUILD SUCCEEDED" build.log
 
       - name: Entitlements eintragen + IPA packen
         run: |

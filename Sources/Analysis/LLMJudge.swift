@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
 
-#if canImport(FoundationModels)
+// Bildeingabe gibt es erst im iOS-27-SDK. Der Build setzt das Flag SDK27 automatisch,
+// wenn mit einem iOS-27-SDK gebaut wird; sonst ist die Feinprüfung einfach aus.
+#if canImport(FoundationModels) && SDK27
 import FoundationModels
 #endif
 
@@ -14,7 +16,7 @@ import FoundationModels
 enum LLMJudge {
 
     static var isAvailable: Bool {
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && SDK27
         if #available(iOS 27.0, *) {
             return SystemLanguageModel.default.isAvailable
         }
@@ -23,7 +25,7 @@ enum LLMJudge {
     }
 
     static var statusText: String {
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && SDK27
         if #available(iOS 27.0, *) {
             switch SystemLanguageModel.default.availability {
             case .available: return "Apple Intelligence bereit (auf dem Gerät)"
@@ -34,7 +36,11 @@ enum LLMJudge {
             }
         }
         #endif
+        #if !SDK27
+        return "In diesem Build nicht enthalten (mit iOS-27-SDK bauen)"
+        #else
         return "Benötigt iOS 27 und Apple Intelligence"
+        #endif
     }
 
     // Feste Prüffragen der eingebauten Kategorien
@@ -54,7 +60,7 @@ enum LLMJudge {
     }
 
     static func ask(_ question: String, image: CGImage) async -> Bool? {
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && SDK27
         if #available(iOS 27.0, *) {
             return await Impl.ask(question, image: image)
         }
@@ -63,7 +69,7 @@ enum LLMJudge {
     }
 }
 
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && SDK27
 @available(iOS 27.0, *)
 private enum Impl {
     @Generable
