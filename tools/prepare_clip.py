@@ -30,8 +30,13 @@ CLASSES = {
 }
 
 path = snapshot_download("apple/coreml-mobileclip", allow_patterns=["mobileclip_s0_*"])
-img_pkg = os.path.join(path, "mobileclip_s0_image.mlpackage")
-txt_pkg = os.path.join(path, "mobileclip_s0_text.mlpackage")
+# Der HF-Cache besteht aus Symlinks – Core ML will echte, beschreibbare Dateien.
+work = os.path.abspath("clip_work")
+os.makedirs(work, exist_ok=True)
+for n in ("mobileclip_s0_image.mlpackage", "mobileclip_s0_text.mlpackage"):
+    shutil.copytree(os.path.join(path, n), os.path.join(work, n), symlinks=False, dirs_exist_ok=True)
+img_pkg = os.path.join(work, "mobileclip_s0_image.mlpackage")
+txt_pkg = os.path.join(work, "mobileclip_s0_text.mlpackage")
 
 img = ct.models.MLModel(img_pkg, skip_model_load=True)
 print("Bild-Encoder Eingänge:", img.get_spec().description.input)
