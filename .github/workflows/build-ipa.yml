@@ -31,10 +31,10 @@ jobs:
           curl -fL --retry 3 -o nsfw.zip https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip
           unzip -q nsfw.zip -d nsfw_src
           find nsfw_src -maxdepth 4 | head -40
-          SRC=$(find nsfw_src -name "*.h5" | head -1)
-          [ -z "$SRC" ] && SRC=$(dirname "$(find nsfw_src -name saved_model.pb | head -1)")
-          echo "Quelle: $SRC"
-          python tools/convert_nsfw.py "$SRC" NSFW.mlpackage
+          SRC=$(find nsfw_src -name saved_model.h5 | head -1)
+          LBL=$(find nsfw_src -name class_labels.txt | head -1)
+          echo "Quelle: $SRC"; echo "Klassen:"; cat "$LBL"
+          python tools/convert_nsfw.py "$SRC" NSFW.mlpackage "$LBL"
       - uses: actions/upload-artifact@v4
         with:
           name: nsfw-model

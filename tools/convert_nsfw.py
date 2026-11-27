@@ -11,6 +11,9 @@ model = tf.keras.models.load_model(h5, compile=False)
 print("Eingang:", model.input_shape, "Ausgang:", model.output_shape)
 
 labels = ["drawings", "hentai", "neutral", "porn", "sexy"]  # Reihenfolge laut Modell-README
+if len(sys.argv) > 3:  # class_labels.txt aus dem Release ist maßgeblich
+    labels = [l.strip() for l in open(sys.argv[3]) if l.strip()]
+print("Klassen:", labels)
 assert model.output_shape[-1] == len(labels)
 
 ml = ct.convert(
