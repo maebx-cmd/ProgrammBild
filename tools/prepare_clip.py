@@ -54,7 +54,10 @@ dtype = np.int32 if tin.type.multiArrayType.dataType == ct.proto.FeatureTypes_pb
 tok = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
 
 def embed(text: str) -> np.ndarray:
-    ids = tok(text, padding="max_length", max_length=ctx, truncation=True)["input_ids"]
+    # Wie OpenAI-CLIP: <start> Tokens <ende>, danach mit 0 auffüllen. Das Modell findet das
+    # Satzende über argmax der IDs – mit dem End-Token als Füllung träfe es die falsche Stelle.
+    ids = tok(text, truncation=True, max_length=ctx)["input_ids"]
+    ids = ids + [0] * (ctx - len(ids))
     arr = np.array(ids, dtype=dtype).reshape(shape)
     v = np.array(txt.predict({tin.name: arr})[tout], dtype=np.float32).reshape(-1)
     return v / np.linalg.norm(v)
@@ -66,9 +69,13 @@ for name, prompts in CLASSES.items():
     result["classes"].append({"name": name, "embedding": [round(float(x), 6) for x in m]})
     print(name, "dim", m.shape[0])
 
-# Plausibilitätscheck: Frau/Mann-Prompts sollen sich unterscheiden
+# Plausibilitätscheck: Frau/Mann-Prompts müssen sich klar unterscheiden
 w, mn = (np.array(c["embedding"]) for c in result["classes"][:2])
-print("Kosinus woman/man:", float(w @ mn))
+cos = float(w @ mn)
+print("Kosinus woman/man:", cos)
+print("Kosinus einzeln:", float(embed("a photo of a woman") @ embed("a photo of a man")),
+      float(embed("a photo of a woman") @ embed("a photo of a car")))
+assert cos < 0.98, "Text-Embeddings zu ähnlich – Tokenisierung prüfen"
 
 with open(os.path.join(OUT, "CLIPClasses.json"), "w") as f:
     json.dump(result, f)
