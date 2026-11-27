@@ -28,9 +28,13 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           pip install -q "tensorflow-cpu==2.12.*" "coremltools==7.2" "numpy<1.24"
-          curl -fL --retry 3 -o nsfw.h5 https://s3.amazonaws.com/ir_public/nsfwjscdn/nsfw_mobilenet2.224x224.h5
-          ls -lh nsfw.h5
-          python tools/convert_nsfw.py nsfw.h5 NSFW.mlpackage
+          curl -fL --retry 3 -o nsfw.zip https://github.com/GantMan/nsfw_model/releases/download/1.1.0/nsfw_mobilenet_v2_140_224.zip
+          unzip -q nsfw.zip -d nsfw_src
+          find nsfw_src -maxdepth 4 | head -40
+          SRC=$(find nsfw_src -name "*.h5" | head -1)
+          [ -z "$SRC" ] && SRC=$(dirname "$(find nsfw_src -name saved_model.pb | head -1)")
+          echo "Quelle: $SRC"
+          python tools/convert_nsfw.py "$SRC" NSFW.mlpackage
       - uses: actions/upload-artifact@v4
         with:
           name: nsfw-model
